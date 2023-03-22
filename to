@@ -56,7 +56,7 @@
   (def prefix (string/format "- [%s] " (print-state state)))
   (def indent (replace-str prefix (chr " ")))
   (def wrap-width (- cols (length prefix)))
-  (def wrapped-text ($< <,text fold --spaces --width ,wrap-width))
+  (def wrapped-text ($< <,text fold -s -w ,wrap-width))
   (def lines (string/split "\n" wrapped-text))
   (printf "- [%s] %s" (print-state state) (decorate (in lines 0)))
   (each line (drop 1 lines)
