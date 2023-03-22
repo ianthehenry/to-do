@@ -58,9 +58,8 @@
   (def wrap-width (- cols (length prefix)))
   (def wrapped-text ($< <,text fold -s -w ,wrap-width))
   (def lines (string/split "\n" wrapped-text))
-  (printf "- [%s] %s" (print-state state) (decorate (in lines 0)))
-  (each line (drop 1 lines)
-    (printf "%s%s" indent (decorate line))))
+  (eachp [i line] lines
+    (printf "%s%s" (if (= i 0) prefix indent) (decorate line))))
 
 (defn print-tasks [tasks]
   (each task (sort-by |(in $ :state) tasks)
