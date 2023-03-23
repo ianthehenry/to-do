@@ -3,20 +3,61 @@
 (use sh)
 (import cmd)
 
+(defn strikethrough [text] (string "\e[9m" text "\e[0m"))
+(defn dim [text] (string "\e[2m" text "\e[0m"))
+(defn yellow [text] (string "\e[33m" text "\e[0m"))
+(defn green [text] (string "\e[32m" text "\e[0m"))
+(defn red [text] (string "\e[31m" text "\e[0m"))
+
 (def todo-file (string/format "%s/scratch/todo" (os/getenv "HOME")))
 
-(def char-to-state {" " :todo "x" :done "-" :skip})
-(def state-to-char (tabseq [[k v] :pairs char-to-state] v k))
+(defn date/to-string [{:year year :month month :day day}]
+  (string/format "%04d-%02d-%02d" year month day))
+
+(def date/peg (peg/compile
+  ~{:main (/ (* :year "-" :month "-" :day)
+               ,|{:year $0  :month $1  :day $2})
+      :year (number (4 :d))
+      :month (number (2 :d))
+      :day (number (2 :d))}))
+
+(def date/arg (cmd/peg "<date>" date/peg))
+
+(defn date/parse [str]
+  (def [date] (peg/match date/peg str))
+  date)
+
+(defn date/today []
+  (def {:year year :month month :month-day day} (os/date))
+  {:year year :month (+ month 1) :day day})
+
+(defn transpose [t] (tabseq [[k v] :pairs t] v k))
+
+(def char-to-state {" " :todo "x" :done "-" :skip ">" :defer})
+(def state-to-char (transpose char-to-state))
 
 (defn not- [f] (fn [x] (not (f x))))
 
-(defn parse-state [char]
-  (assert (char-to-state char)
-    (string/format "unknown state %s" char)))
+(defn parse-state [state-str]
+  (def char (string/slice state-str 0 1))
+  (def arg (string/trim (string/slice state-str 1)))
+  (def state
+    (assert (char-to-state (string/slice char 0 1))
+      (string/format "unknown state %q" char)))
+  (if (empty? arg)
+    state
+    [state (date/parse arg)]))
 
 (defn print-state [state]
-  (assert (state-to-char state)
-    (string/format "unknown state %s" state)))
+  (def state-code (case (type state)
+    :keyword state
+    :tuple (first state)))
+  (def state-char
+    (assert (state-to-char state-code)
+      (string/format "unknown state %q" state)))
+  (match state
+    [_ arg] (string/format "%s %s" state-char (date/to-string arg))
+    state-char))
 
 (defn trim-lines [str]
   (as-> str $
@@ -28,15 +69,12 @@
 
 (def task-peg (peg/compile
   ~{:main (any (* :task (+ "\n" -1)))
-    :task (replace
-      (* "- ["(<- (to "]")) "] "(<- (to (+ "\n- [" -1))))
-      ,|@{:state (parse-state $0) :text (trim-lines $1)})}))
+    :state (/ (* "- [" (<- (to "]")) "]") ,parse-state)
+    :text (/ (<- (to (+ "\n- [" -1))) ,trim-lines)
+    :task (/ (* :state :text) ,|@{:state $0 :text $1})}))
 
 (defn parse-tasks []
   (peg/match task-peg (slurp todo-file)))
-
-(defn strikethrough [text] (string "\e[9m" text "\e[0m"))
-(defn dim [text] (string "\e[2m" text "\e[0m"))
 
 (defn replace-str [str char]
   (def buf (buffer str))
@@ -46,24 +84,47 @@
 
 (def cols (scan-number ($<_ tput cols)))
 
-(defn print-task [{:state state :text text}]
-  (def decorate
+(defn print-task [{:state state :text text :highlight highlight}]
+  (def decorate-text
     (case state
       :done strikethrough
-      :skip dim
       identity))
+  (def color (if highlight
+    (case state
+      :skip yellow
+      :defer yellow
+      green)
+    identity))
+  (def decorate-all
+    (comp color (case state
+      :todo identity
+      dim)))
 
-  (def prefix (string/format "- [%s] " (print-state state)))
+  (def leader (if highlight "*" "-"))
+
+  (def prefix (string/format "%s [%s] " leader (print-state state)))
   (def indent (replace-str prefix (chr " ")))
   (def wrap-width (- cols (length prefix)))
   (def wrapped-text ($< <,text fold -s -w ,wrap-width))
   (def lines (string/split "\n" wrapped-text))
   (eachp [i line] lines
-    (printf "%s%s" (if (= i 0) prefix indent) (decorate line))))
+    (printf "%s%s"
+      (decorate-all (if (= i 0) prefix indent))
+      (decorate-all (decorate-text line)))))
+
+(defn defer? [state]
+  (match state
+    :defer true
+    [:defer _] true
+    false))
+
+(defn should-print [{:state state :highlight highlight}]
+  (or highlight (not (defer? state))))
 
 (defn print-tasks [tasks]
   (each task (sort-by |(in $ :state) tasks)
-    (print-task task)))
+    (if (should-print task)
+      (print-task task))))
 
 (defn first-word [str]
   (take-while |(not= $ (chr " ")) str))
@@ -104,7 +165,7 @@
     (os/exit 0))
 
   (def output @"")
-  (def [exit-code] (run fzf --multi --print0 --with-nth "2.." --read0 <,input >,output))
+  (def [exit-code] (run fzf --height 10 --multi --print0 --with-nth "2.." --read0 <,input >,output))
   (def selections
     (case exit-code
       0 (drop-last (string/split "\0" output))
@@ -117,22 +178,35 @@
     (def task-index (scan-number (first-word selection)))
     (def task (in tasks task-index))
     (set (task :state) new-state)
-    (print-task task))
+    (set (task :highlight) true))
+  (print-tasks tasks)
   (unless (empty? selections)
     (save-tasks tasks)))
 
-(cmd/defn to-do [task (optional :string)]
+(defn append-task [state text]
+  (with [f (file/open todo-file :a)]
+    (file/write f (string/format "- [%s] %s\n" (print-state state) text)))
+  (print-task {:state state :text text}))
+
+(def task/arg ["<task>" :string])
+
+(cmd/defn to-do
+  "add or list tasks"
+  [task (optional task/arg)]
   (if task
-    ($ printf "- [ ] %s\n" ,task > (file/open todo-file :a))
+    (append-task :todo task)
     (print-tasks (parse-tasks))))
 
-(cmd/defn to-edit []
+(cmd/defn to-edit "open the task list" []
   (def editor (string/split " " (or (os/getenv "VISUAL") (os/getenv "EDITOR") "vim")))
   ($ ,;editor ,todo-file))
 
 (cmd/main (cmd/group
+  "A very simple task manager."
   do to-do
-  undo (cmd/fn [] (change-state |(not= $ :todo) :todo))
-  did (cmd/fn [] (change-state :todo :done))
-  dont (cmd/fn [] (change-state :todo :skip))
+  undo (cmd/fn "mark a task todo" [] (change-state |(not= $ :todo) :todo))
+  done (cmd/fn "finish a task" [] (change-state :todo :done))
+  did (cmd/fn "add a finished task" [task (required task/arg)] (append-task :done task))
+  dont (cmd/fn "skip a task" [] (change-state :todo :skip))
+  defer (cmd/fn "schedule a task for later" [date (required date/arg)] (change-state :todo [:defer date]))
   edit to-edit))
