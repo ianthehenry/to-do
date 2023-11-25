@@ -5,5 +5,9 @@
     {:url "https://github.com/ianthehenry/cmd.git"
      :tag "v1.1.0"}
      {:url "https://github.com/andrewchambers/janet-sh.git"
-      :tag "ec620d5d7310b3682dd0f7bfa86eae6b244d1510"}
+      :tag "221bcc869bf998186d3c56a388c8313060bfd730"}
   ])
+
+(declare-executable
+  :name "to"
+  :entry "src/main.janet")

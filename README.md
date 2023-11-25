@@ -32,11 +32,12 @@ $ to edit # open in $EDITOR
 $ to defer yyyy-mm-dd # reschedule a task for the future
 ```
 
-In order to use it, you need `fzf` installed, Janet, plus the Janet dependencies [`cmd`](https://github.com/ianthehenry/cmd) and [`sh`](https://github.com/andrewchambers/janet-sh).
+In order to use it, you need `fzf` installed.
 
 ```
-$ jpm install sh
-$ jpm install cmd
+$ jpm -l deps
+$ jpm -l build
+$ build/to do
 ```
 
 I also highly recommend [`zsh-autoquoter`](https://github.com/ianthehenry/zsh-autoquoter/), which lets you add tasks items without needing to quote them on the command line.
